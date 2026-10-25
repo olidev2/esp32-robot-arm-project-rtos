@@ -1,0 +1,2 @@
+# Default target: classic ESP32 (Xtensa)
+CONFIG_IDF_TARGET="esp32"
