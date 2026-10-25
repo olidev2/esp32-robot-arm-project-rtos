@@ -3,7 +3,7 @@ sdkconfig
 sdkconfig.old
 dependencies.lock
 managed_components/
-.vscode/
 .claude/
 *.pyc
 __pycache__/
+README.md

@@ -1,0 +1,16 @@
+{
+    "idf.currentSetup": "/Users/newprime1/.espressif/v6.1/esp-idf",
+    "idf.adapterTargetName": "esp32",
+    "C_Cpp.default.compileCommands": "${workspaceFolder}/build/compile_commands.json",
+    "C_Cpp.default.compilerPath": "/Users/newprime1/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/bin/xtensa-esp32-elf-gcc",
+    "C_Cpp.default.intelliSenseMode": "linux-gcc-x64",
+    "C_Cpp.default.compilerArgs": [
+        "-U__APPLE__",
+        "-U__MACH__"
+    ],
+    "C_Cpp.errorSquiggles": "enabled",
+    "files.associations": {
+        "*.h": "c",
+        "*.c": "c"
+    }
+}

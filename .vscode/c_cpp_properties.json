@@ -1,0 +1,35 @@
+{
+    "configurations": [
+        {
+            "name": "ESP-IDF",
+            "compileCommands": "${workspaceFolder}/build/compile_commands.json",
+            "compilerPath": "/Users/newprime1/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/bin/xtensa-esp32-elf-gcc",
+            "compilerArgs": [
+                "-U__APPLE__",
+                "-U__MACH__"
+            ],
+            "cStandard": "gnu17",
+            "cppStandard": "gnu++20",
+            "intelliSenseMode": "linux-gcc-x64",
+            "defines": [
+                "ESP_PLATFORM",
+                "__XTENSA__"
+            ],
+            "includePath": [
+                "${workspaceFolder}/**",
+                "${workspaceFolder}/build/config",
+                "/Users/newprime1/.espressif/v6.1/esp-idf/components/esp_driver_gpio/include",
+                "/Users/newprime1/.espressif/v6.1/esp-idf/components/esp_hal_gpio/include",
+                "/Users/newprime1/.espressif/v6.1/esp-idf/components/**"
+            ],
+            "browse": {
+                "path": [
+                    "${workspaceFolder}",
+                    "/Users/newprime1/.espressif/v6.1/esp-idf/components"
+                ],
+                "limitSymbolsToIncludedHeaders": false
+            }
+        }
+    ],
+    "version": 4
+}
