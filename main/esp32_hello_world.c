@@ -6,14 +6,20 @@
 #include "driver/i2c_master.h"
 #include <math.h>
 
+// GLOBAL DEFINES ESP
+
 #define I2C_MASTER_SCL_IO 22           // Pin zegara (SCL)
 #define I2C_MASTER_SDA_IO 21           // Pin danych (SDA)
 #define I2C_MASTER_FREQ_HZ 100000      //  100 kHz
 #define I2C_MASTER_DEVICE_ADDRESS 0x40 // domyslny adres dla modulu pca9865
+#define BLINK_GPIO 2
+
+static const char *TAG = "hello_world";
+
+// GLOBAL DEFINES PHYSICAL
 
 // define dla fizycznych wymiarow robota
 // narazie sa tam wrzucone losowe liczby
-
 // w konwencji dh nie mozna robic pustych macierzy ktore nie dotycza przegubow
 // dlatego zakladamy ze serwo 1 jest tak jakby w stole
 // bedzie to pozwalalo na to ze robot bedzie wiedzial gdzie jest Z = absolutne 0 (stol)
@@ -158,6 +164,18 @@ void calculate_forward_kinematics(float final_matrix[4][4])
     }
 }
 
+u_int16_t angle_to_pwm(float angle)
+{
+    if (angle > 180.0f)
+        angle = 180.0f;
+    if (angle < 0.0f)
+        angle = 0.0f;
+
+    float pwm_float = 102.0f + (angle / 180.0f) * (512.0f - 102.0f);
+
+    return (u_int16_t)pwm_float;
+}
+
 // SEKCJA ESP ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // konfigurujemy I2C
@@ -194,6 +212,21 @@ void i2c_init(void)
     ESP_ERROR_CHECK(i2c_new_master_bus(&i2c_mst_config, &bus_handle));
     ESP_ERROR_CHECK(i2c_master_bus_add_device(bus_handle, &dev_cfg, &dev_handle));
     ESP_LOGI(TAG, "I2C initialized");
+}
+
+void set_servo_angle(int servo_number, float angle)
+{
+    u_int16_t pwm = angle_to_pwm(angle);
+    u_int8_t starting_adress = 0x06 + (4 * servo_number);
+    u_int8_t pwm_data[5];
+    pwm_data[0] = starting_adress; // adres poczatkowy
+    pwm_data[1] = 0;               // ON_L
+    pwm_data[2] = 0;               // ON_H
+    pwm_data[3] = pwm & 0xFF;      // OFF_L wyciagamy dolne 8 bitow
+    pwm_data[4] = pwm >> 8;        // OFF_H wyciagamy gorne 8 bitow
+    ESP_ERROR_CHECK(i2c_master_transmit(dev_handle, pwm_data, 5, -1));
+    vTaskDelay(pdMS_TO_TICKS(10));
+    ESP_LOGI(TAG, "SERVO ANGLE CHANGED");
 }
 
 // modul pca9685 ma rozdzielczosc 12 bitowa czyli 4095 pozycji
@@ -239,28 +272,52 @@ void reset_servos_position(void)
     // wlaczamy serw
 }
 
-#define BLINK_GPIO 2
-
-static const char *TAG = "hello_world";
-
 void app_main(void)
 {
     ESP_LOGI(TAG, "uruchamianie esp32 z esp-idf...");
     int counter = 0;
+    float wynik[4][4];
     gpio_reset_pin(BLINK_GPIO);
     gpio_set_direction(BLINK_GPIO, GPIO_MODE_OUTPUT);
     ESP_LOGI(TAG, "Uruchamianie ESP32 z ESP-IDF...");
 
     i2c_init();              // odpalamy master bus magistrale I2C
     reset_servos_position(); // resetujemy pozycje serw
+    init_robot_kinematics(); // przygotowujemy dane do obliczen
     while (1)
     {
-        ESP_LOGI(TAG, "Hello world from ESP32! count=%d", counter++);
+        ESP_LOGI(TAG, "Hello world from ESP32!");
         gpio_set_level(BLINK_GPIO, 1);
         ESP_LOGI(TAG, "LED ON");
         vTaskDelay(pdMS_TO_TICKS(1000));
         gpio_set_level(BLINK_GPIO, 0);
         ESP_LOGI(TAG, "LED OFF");
         vTaskDelay(pdMS_TO_TICKS(1000));
+        while (counter <= 180)
+        {
+            robot_joints[0].theta = counter;
+            robot_joints[1].theta = counter;
+            robot_joints[2].theta = counter;
+            set_servo_angle(0, robot_joints[0].theta);
+            set_servo_angle(1, robot_joints[1].theta);
+            set_servo_angle(2, robot_joints[2].theta);
+            calculate_forward_kinematics(wynik);
+            ESP_LOGI(TAG, "Koordynaty chwytaka: X=%.1f, Y=%.1f, Z=%.1f", wynik[0][3], wynik[1][3], wynik[2][3]);
+            counter++;
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
+        while (counter >= 0)
+        {
+            robot_joints[0].theta = counter;
+            robot_joints[1].theta = counter;
+            robot_joints[2].theta = counter;
+            set_servo_angle(0, robot_joints[0].theta);
+            set_servo_angle(1, robot_joints[1].theta);
+            set_servo_angle(2, robot_joints[2].theta);
+            calculate_forward_kinematics(wynik);
+            ESP_LOGI(TAG, "Koordynaty chwytaka: X=%.1f, Y=%.1f, Z=%.1f", wynik[0][3], wynik[1][3], wynik[2][3]);
+            counter--;
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
     }
 }
