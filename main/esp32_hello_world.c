@@ -5,6 +5,17 @@
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
 #include <math.h>
+#include <stdbool.h>
+#include <string.h>
+#include "esp_vfs_dev.h"
+#include "sdkconfig.h"
+
+// TUTORIAL DLA TESTERA
+// 1. najpierw musisz zmierzyc i ustawic dobra wartosci fizycznych wymiarow robota
+// w sekcji global defines physical w mm ( wiec w set pozniej tez podawaj mm)
+// 2. narazie dziala tylko sterowanie w terminale za pomoca "GET" i "SET <x> <y> <z>" oczywiscie bez tych <>
+// 3. jezeli serwa ida na odwrot niz sie wydaje lub trzeszca i brzmi jakby mialo wybuchnac to trzeba zmienic znak i odjac 90.0f stopni w move_your_robot
+// 4. w console task zmienic false na true w move_your_robot jak chce sie tez sterowac serwem chwytaka
 
 // GLOBAL DEFINES ESP
 
@@ -33,6 +44,7 @@ static const char *TAG = "hello_world";
 #define M_PI 3.14159265358979323846
 #endif
 
+void set_servo_angle(int servo_number, float angle);
 //  struct do trzymania informacji pojedynczego serwa/ramienia
 
 typedef struct
@@ -170,10 +182,199 @@ u_int16_t angle_to_pwm(float angle)
         angle = 180.0f;
     if (angle < 0.0f)
         angle = 0.0f;
-
+    // to naklada jeden zakres na drugi
+    // funkcja wzieta z neta (chyba z excela )
     float pwm_float = 102.0f + (angle / 180.0f) * (512.0f - 102.0f);
 
     return (u_int16_t)pwm_float;
+}
+void set_servo_angle(int servo_number, float angle)
+{
+    u_int16_t pwm = angle_to_pwm(angle);
+    u_int8_t starting_adress = 0x06 + (4 * servo_number);
+    u_int8_t pwm_data[5];
+    pwm_data[0] = starting_adress; // adres poczatkowy
+    pwm_data[1] = 0;               // ON_L
+    pwm_data[2] = 0;               // ON_H
+    pwm_data[3] = pwm & 0xFF;      // OFF_L wyciagamy dolne 8 bitow
+    pwm_data[4] = pwm >> 8;        // OFF_H wyciagamy gorne 8 bitow
+    ESP_ERROR_CHECK(i2c_master_transmit(dev_handle, pwm_data, 5, -1));
+    vTaskDelay(pdMS_TO_TICKS(10));
+    ESP_LOGI(TAG, "SERVO ANGLE CHANGED");
+}
+
+// inverse kinematics - podajemy wspolrzedne w base 0 i z tego obliczamy thety dla serw zeby osiagnac
+// ta pozycje
+bool calculate_inverse_kinematics(float target_x, float target_y, float target_z,
+                                  bool active_gripper, float target_pitch_deg,
+                                  float *out_t0, float *out_t1, float *out_t2, float *out_t3)
+{
+    // oliczenie kata bazy (theta 0)
+    float theta0 = atan2(target_y, target_x);
+
+    // Całkowity rzut poziomy na płaszczyznę blatu (odległość do celu)
+    float r = sqrt(target_x * target_x + target_y * target_y);
+
+    // tworzymy trojkat 2d od drugiego serwa
+    // wyrzucamy serwo 1 dla stworzenia problemu 2d
+    // Zredukowana wysokość (od osi barku, a nie od stołu)
+    float z = target_z - L1_BASE_HEIGHT;
+
+    // Zmienne robocze dla geometrii trójkąta (do czego ma sięgnąć łokieć)
+    float target_r, target_z_eff;
+    float L_last; // Długość ostatniego członu użytego do obliczeń trójkąta
+
+    // budowanie trojkata w zaleznosci od ilosci osi
+    if (active_gripper)
+    {
+        // metoda srodka nadgarstka (4 osie)
+        float pitch_rad = target_pitch_deg * (M_PI / 180.0f);
+
+        // Cofamy się od punktu docelowego o długość chwytaka (L4) pod zadanym kątem
+        target_r = r - (L4_GRIPPER_OFFSET * cos(pitch_rad));
+        target_z_eff = z - (L4_GRIPPER_OFFSET * sin(pitch_rad));
+
+        // Trójkąt budujemy używając tylko długości ramienia (L2) i przedramienia (L3)
+        L_last = L3_ARM2_LENGTH;
+    }
+    else
+    {
+        // sztywny chwytak 3 osie
+        target_r = r;
+        target_z_eff = z;
+
+        // Trójkąt budujemy używając sztywnego pręta (L3 + L4)
+        L_last = L3_ARM2_LENGTH + L4_GRIPPER_OFFSET;
+    }
+
+    // klasyczna kinematyka
+    float L1 = L2_ARM1_LENGTH; // Główna kość ramienia
+
+    // Odległość w prostej linii od barku do obliczonego celu (nadgarstka lub końca chwytaka)
+    float d = sqrt(target_r * target_r + target_z_eff * target_z_eff);
+
+    // Zabezpieczenie fizyczne (czy cel nie jest za daleko lub za blisko)
+    if (d > (L1 + L_last) || d < fabs(L1 - L_last))
+    {
+        ESP_LOGE(TAG, "Cel poza fizycznym zasięgiem ramienia!");
+        return false;
+    }
+    // tutaj sie robi troche ciezko z zrozumieniem tego algorytmu
+    // Twierdzenie cosinusów dla łokcia (theta 2)
+    float cos_theta2 = (target_r * target_r + target_z_eff * target_z_eff - L1 * L1 - L_last * L_last) / (2 * L1 * L_last);
+    if (cos_theta2 > 1.0f)
+        cos_theta2 = 1.0f;
+    if (cos_theta2 < -1.0f)
+        cos_theta2 = -1.0f;
+
+    // Konfiguracja "elbow up" (wypukły w górę)
+    float theta2 = -acos(cos_theta2);
+
+    // Geometria dla barku (theta 1)
+    float gamma = atan2(target_z_eff, target_r);
+    float alpha = atan2(L_last * sin(theta2), L1 + L_last * cos(theta2));
+    float theta1 = gamma - alpha;
+
+    // wyliczenie katow theta
+    float theta3 = 0.0f;
+    if (active_gripper)
+    {
+        float pitch_rad = target_pitch_deg * (M_PI / 180.0f);
+        // Ponieważ kąt pitch to całkowity kąt chwytaka względem podłoża,
+        // a thety dodają się do siebie w łańcuchu kinematycznym:
+        // Pitch = theta1 + theta2 + theta3  =>  theta3 = Pitch - theta1 - theta2
+        theta3 = pitch_rad - (theta1 + theta2);
+    }
+
+    // Zapisujemy wyliczone wartości (zamienione na stopnie) pod wskaźniki
+    *out_t0 = theta0 * (180.0f / M_PI);
+    *out_t1 = theta1 * (180.0f / M_PI);
+    *out_t2 = theta2 * (180.0f / M_PI);
+    *out_t3 = theta3 * (180.0f / M_PI);
+
+    return true;
+}
+
+void move_robot_to_xyz(float x, float y, float z, bool use_gripper, float pitch)
+{
+    float t0, t1, t2, t3;
+
+    // Wołamy naszą nową funkcję IK
+    if (calculate_inverse_kinematics(x, y, z, use_gripper, pitch, &t0, &t1, &t2, &t3))
+    {
+
+        // Aktualizujemy globalną tablicę (żeby funkcja Forward Kinematics miała dobre dane)
+        robot_joints[0].theta = t0;
+        robot_joints[1].theta = t1;
+        robot_joints[2].theta = t2;
+        robot_joints[3].theta = t3; // Nowe 4. serwo
+
+        // Aplikujemy offsety mechaniczne.
+        // Jeśli serwo środkuje na 90 stopniach, dodajemy matematyczny kąt do fizycznego środka.
+        // tutaj dajemy plusa bo zakladam ze serwo jak idzie w dodatnia strone to idzie do gory ramie
+        // jest to dodanie fizycznosci do czystej matmy
+        set_servo_angle(0, 90.0f + t0);
+        set_servo_angle(1, 90.0f + t1); // Bark
+        set_servo_angle(2, 90.0f + t2); // Łokieć
+
+        if (use_gripper)
+        {
+            set_servo_angle(3, 90.0f + t3); // Nadgarstek
+        }
+        else
+        {
+            // Sztywny chwytak - trzymaj ustaloną pozycję, by się nie majtał (np. równo ze środkiem)
+            set_servo_angle(3, 90.0f);
+        }
+
+        ESP_LOGI(TAG, "Wykonano ruch do cel: %.1f, %.1f, %.1f (Pitch: %.1f)", x, y, z, pitch);
+    }
+}
+
+// SEKCJA RTOS ///////////////////////////////////////////////////////////////////////////////////////////////////
+void console_task(void *pvParameters)
+{
+    char line[128]; // bufor na info z terminalu
+    ESP_LOGI(TAG, "terminal gotowy. Wpisz komende (np. SET 100 0 50 lub GET):");
+    while (1)
+    {
+        if (fgets(line, sizeof(line), stdin) != NULL)
+        {
+            if (strlen(line) <= 2)
+            {
+                continue;
+            }
+            if (strncmp(line, "GET", 3) == 0)
+            {
+                float f_matrix[4][4];
+                calculate_forward_kinematics(f_matrix);
+
+                // wyciagamy tylko wektor translacji p
+                ESP_LOGI(TAG, "Aktualna pozycja: X=%.1f, Y=%.1f, Z=%.1f",
+                         f_matrix[0][3], f_matrix[1][3], f_matrix[2][3]);
+            }
+            else if (strncmp(line, "SET", 3) == 0)
+            {
+                float x, y, z;
+                // sciagamy xyz
+                int wynik = sscanf(line, "SET %f %f %f", &x, &y, &z);
+                if (wynik == 3)
+                {
+                    ESP_LOGI(TAG, "Ruch robota zaaktywowany");
+                    move_robot_to_xyz(x, y, z, false, 0);
+                }
+                else
+                {
+                    ESP_LOGI(TAG, "Blad skladni SET! Skladnia SET: 'SET: x y z' ");
+                }
+            }
+            else
+            {
+                ESP_LOGI(TAG, "Nieznana komenda! %s", line);
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
 }
 
 // SEKCJA ESP ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -213,22 +414,6 @@ void i2c_init(void)
     ESP_ERROR_CHECK(i2c_master_bus_add_device(bus_handle, &dev_cfg, &dev_handle));
     ESP_LOGI(TAG, "I2C initialized");
 }
-
-void set_servo_angle(int servo_number, float angle)
-{
-    u_int16_t pwm = angle_to_pwm(angle);
-    u_int8_t starting_adress = 0x06 + (4 * servo_number);
-    u_int8_t pwm_data[5];
-    pwm_data[0] = starting_adress; // adres poczatkowy
-    pwm_data[1] = 0;               // ON_L
-    pwm_data[2] = 0;               // ON_H
-    pwm_data[3] = pwm & 0xFF;      // OFF_L wyciagamy dolne 8 bitow
-    pwm_data[4] = pwm >> 8;        // OFF_H wyciagamy gorne 8 bitow
-    ESP_ERROR_CHECK(i2c_master_transmit(dev_handle, pwm_data, 5, -1));
-    vTaskDelay(pdMS_TO_TICKS(10));
-    ESP_LOGI(TAG, "SERVO ANGLE CHANGED");
-}
-
 // modul pca9685 ma rozdzielczosc 12 bitowa czyli 4095 pozycji
 // pelny cykl to 50 hz czyli 20 ms
 // pozycja srodkowa dla ser analogowych wymaga podania stanu wysokiego przez
@@ -275,49 +460,27 @@ void reset_servos_position(void)
 void app_main(void)
 {
     ESP_LOGI(TAG, "uruchamianie esp32 z esp-idf...");
-    int counter = 0;
-    float wynik[4][4];
     gpio_reset_pin(BLINK_GPIO);
     gpio_set_direction(BLINK_GPIO, GPIO_MODE_OUTPUT);
-    ESP_LOGI(TAG, "Uruchamianie ESP32 z ESP-IDF...");
 
     i2c_init();              // odpalamy master bus magistrale I2C
     reset_servos_position(); // resetujemy pozycje serw
     init_robot_kinematics(); // przygotowujemy dane do obliczen
+
+    // ujednoliecenie znakow w stdin dla komunikacji
+    // to jest po to zeby esp nie robilo konfliktu z stdin dla c
+    esp_vfs_dev_uart_port_set_rx_line_endings(CONFIG_ESP_CONSOLE_UART_NUM, ESP_LINE_ENDINGS_CR);
+    esp_vfs_dev_uart_port_set_tx_line_endings(CONFIG_ESP_CONSOLE_UART_NUM, ESP_LINE_ENDINGS_CRLF);
+
+    // odpalamy console task ktory od uzytkownika bierze komendy
+    // dajemy mu troche pamieci stacku bo sscanf zzera pamiec
+    xTaskCreate(console_task, "console_task", 4096, NULL, 5, NULL);
     while (1)
     {
         ESP_LOGI(TAG, "Hello world from ESP32!");
         gpio_set_level(BLINK_GPIO, 1);
-        ESP_LOGI(TAG, "LED ON");
         vTaskDelay(pdMS_TO_TICKS(1000));
         gpio_set_level(BLINK_GPIO, 0);
-        ESP_LOGI(TAG, "LED OFF");
         vTaskDelay(pdMS_TO_TICKS(1000));
-        while (counter <= 180)
-        {
-            robot_joints[0].theta = counter;
-            robot_joints[1].theta = counter;
-            robot_joints[2].theta = counter;
-            set_servo_angle(0, robot_joints[0].theta);
-            set_servo_angle(1, robot_joints[1].theta);
-            set_servo_angle(2, robot_joints[2].theta);
-            calculate_forward_kinematics(wynik);
-            ESP_LOGI(TAG, "Koordynaty chwytaka: X=%.1f, Y=%.1f, Z=%.1f", wynik[0][3], wynik[1][3], wynik[2][3]);
-            counter++;
-            vTaskDelay(pdMS_TO_TICKS(10));
-        }
-        while (counter >= 0)
-        {
-            robot_joints[0].theta = counter;
-            robot_joints[1].theta = counter;
-            robot_joints[2].theta = counter;
-            set_servo_angle(0, robot_joints[0].theta);
-            set_servo_angle(1, robot_joints[1].theta);
-            set_servo_angle(2, robot_joints[2].theta);
-            calculate_forward_kinematics(wynik);
-            ESP_LOGI(TAG, "Koordynaty chwytaka: X=%.1f, Y=%.1f, Z=%.1f", wynik[0][3], wynik[1][3], wynik[2][3]);
-            counter--;
-            vTaskDelay(pdMS_TO_TICKS(10));
-        }
     }
 }
