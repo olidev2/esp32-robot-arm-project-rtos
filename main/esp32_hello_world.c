@@ -16,6 +16,7 @@
 // 2. narazie dziala tylko sterowanie w terminale za pomoca "GET" i "SET <x> <y> <z>" oczywiscie bez tych <>
 // 3. jezeli serwa ida na odwrot niz sie wydaje lub trzeszca i brzmi jakby mialo wybuchnac to trzeba zmienic znak i odjac 90.0f stopni w move_your_robot
 // 4. w console task zmienic false na true w move_your_robot jak chce sie tez sterowac serwem chwytaka
+// 5. wpisz "MOVE <numer_serwa>" np. "MOVE 1" by przesunac wybrane serwo (0, 1, 2 lub 3) o 10 stopni w celach testowych.
 
 // GLOBAL DEFINES ESP
 
@@ -56,6 +57,9 @@ typedef struct
 } SingleArm;
 
 SingleArm robot_joints[4]; // pelne 4 osie
+
+// Zmienna kierunkowa dla trybu testowego MOVE
+bool test_move_direction_up = true;
 
 // generyczna funkcja do mnozenia macierzy 4x4
 void multiply_matrices(float A[4][4], float B[4][4], float result[4][4])
@@ -331,11 +335,51 @@ void move_robot_to_xyz(float x, float y, float z, bool use_gripper, float pitch)
     }
 }
 
+// funckja testowa do poruszania serwem o 10 stopni
+void test_move_servo(int servo_num)
+{
+    if (servo_num < 0 || servo_num > 3)
+    {
+        ESP_LOGE(TAG, "nieprawidłowy numer serwa! uzyj 0-3.");
+        return;
+    }
+
+    // pobieramy aktualny matematyczny kat z pamieci
+    float current_theta = robot_joints[servo_num].theta;
+
+    // zmieniamy kierunek jak dojedziemy do limitu
+    if (current_theta >= 70.0f)
+        test_move_direction_up = false;
+    if (current_theta <= -70.0f)
+        test_move_direction_up = true;
+
+    // przesuwamy o 10 stopni w wybranym kierunku
+    if (test_move_direction_up)
+    {
+        current_theta += 10.0f;
+    }
+    else
+    {
+        current_theta -= 10.0f;
+    }
+
+    // zapisujemy katu do pamieci
+    robot_joints[servo_num].theta = current_theta;
+
+    // aplikujemy offset 90 stopni i wysylamy
+    // WAZNE TUTAJ TRZEBA DODAC SWITCH DLA servo_num JEZELI KTORES Z SERW PRZY KALIBRACJI
+    // WYJDZIE ZLE!!!!!!!
+    set_servo_angle(servo_num, 90.0f + current_theta);
+
+    ESP_LOGI(TAG, "TEST MOVE: serwo %d przesuniete. nowy kat mat.: %.1f, kat fiz.: %.1f",
+             servo_num, current_theta, 90.0f + current_theta);
+}
+
 // SEKCJA RTOS ///////////////////////////////////////////////////////////////////////////////////////////////////
 void console_task(void *pvParameters)
 {
     char line[128]; // bufor na info z terminalu
-    ESP_LOGI(TAG, "terminal gotowy. Wpisz komende (np. SET 100 0 50 lub GET):");
+    ESP_LOGI(TAG, "terminal gotowy. Wpisz komende (np. SET 100 0 50, GET, lub MOVE 1):");
     while (1)
     {
         if (fgets(line, sizeof(line), stdin) != NULL)
@@ -365,7 +409,21 @@ void console_task(void *pvParameters)
                 }
                 else
                 {
-                    ESP_LOGI(TAG, "Blad skladni SET! Skladnia SET: 'SET: x y z' ");
+                    ESP_LOGI(TAG, "Blad skladni SET! Skladnia SET: 'SET <x> <y> <z>' ");
+                }
+            }
+            else if (strncmp(line, "MOVE", 4) == 0)
+            {
+                int servo_id;
+                int wynik = sscanf(line, "MOVE %d", &servo_id);
+                if (wynik == 1)
+                {
+                    ESP_LOGI(TAG, "Uruchamiam test serwa %d", servo_id);
+                    test_move_servo(servo_id);
+                }
+                else
+                {
+                    ESP_LOGI(TAG, "Blad skladni MOVE! Skladnia MOVE: 'MOVE <numer_serwa>' (0-3)");
                 }
             }
             else
