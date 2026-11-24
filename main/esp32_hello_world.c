@@ -33,12 +33,13 @@ static const char *TAG = "hello_world";
 // define dla fizycznych wymiarow robota
 // narazie sa tam wrzucone losowe liczby
 // w konwencji dh nie mozna robic pustych macierzy ktore nie dotycza przegubow
-// dlatego zakladamy ze serwo 1 jest tak jakby w stole
+// to ma byc w milimetrach
+// dlatego zakladamy ze serwo 0 jest tak jakby w stole
 // bedzie to pozwalalo na to ze robot bedzie wiedzial gdzie jest Z = absolutne 0 (stol)
-#define L1_BASE_HEIGHT 60.0f    // d1: od stolu do serwa 2
-#define L2_ARM1_LENGTH 120.0f   // a2: od serwa 2 do serwa 3
-#define L3_ARM2_LENGTH 130.0f   // a3: od serwa 3 do serwa 4
-#define L4_GRIPPER_OFFSET 50.0f // a4: od serwa 4 do konca chwytaka
+#define L1_BASE_HEIGHT 60.0f    // d1: od stolu do serwa 1
+#define L2_ARM1_LENGTH 120.0f   // a2: od serwa 1 do serwa 2
+#define L3_ARM2_LENGTH 130.0f   // a3: od serwa 2 do serwa 3
+#define L4_GRIPPER_OFFSET 50.0f // a4: od serwa 3 do konca chwytaka
 
 // definiujemy wartosc pi do konwersji na radiany jak jej nie ma
 #ifndef M_PI
@@ -112,25 +113,25 @@ void generate_dh_matrix(SingleArm arm, float result[4][4])
 
 void init_robot_kinematics()
 {
-    //  obrot serwa bazy (theta) oraz odleglosc miedzy frame 0 a serwo 2
+    //  obrot serwa bazy (theta) oraz odleglosc miedzy base 0 a serwo 1
     robot_joints[0].d = L1_BASE_HEIGHT;
     robot_joints[0].a = 0.0f;
     robot_joints[0].alpha = 90.0f;
     robot_joints[0].theta = 0.0f;
 
-    // obrot serwa 2 oraz odleglosc miedzy 2 a 3
+    // obrot serwa 1 oraz odleglosc miedzy 1 a 2
     robot_joints[1].d = 0.0f;
     robot_joints[1].a = L2_ARM1_LENGTH;
     robot_joints[1].alpha = 0.0f;
     robot_joints[1].theta = 0.0f;
 
-    // obrot serwa 3 oraz odleglosc miedzy 3 a 4
+    // obrot serwa 2 oraz odleglosc miedzy 2 a 3
     robot_joints[2].d = 0.0f;
     robot_joints[2].a = L3_ARM2_LENGTH;
     robot_joints[2].alpha = 0.0f;
     robot_joints[2].theta = 0.0f;
 
-    //  obrot serwa 4 oraz odleglosc miedzy 4 a chwytak
+    //  obrot serwa 3 oraz odleglosc miedzy 3 a chwytak
     robot_joints[3].d = 0.0f;
     robot_joints[3].a = L4_GRIPPER_OFFSET;
     robot_joints[3].alpha = 0.0f; // tego nie zmieniac bo my mamy osie rownolegle
